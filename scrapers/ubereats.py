@@ -89,7 +89,11 @@ class UberEatsScraper:
         print(f"[UberEats]   UUID: {store_uuid} → {hex_uuid}")
 
         for uuid_str in [hex_uuid, store_uuid]:
-            url = f"https://www.ubereats.com/api/getStoreV1?localeCode=es&storeUuid={uuid_str}"
+            url = (
+                f"https://www.ubereats.com/api/getStoreV1?localeCode=es"
+                f"&storeUuid={uuid_str}"
+                f"&userLatitude={self.lat}&userLongitude={self.lon}"
+            )
             try:
                 resp = self.session.get(url, headers=HEADERS)
                 if resp.status_code == 200:
