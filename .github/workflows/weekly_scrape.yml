@@ -2,9 +2,7 @@ name: Weekly Competitor Pricing Scraper
 
 on:
   schedule:
-    # Every Monday at 07:00 UTC = 08:00 Madrid (CET) / 09:00 Madrid (CEST summer)
     - cron: '0 7 * * 1'
-
   workflow_dispatch:
 
 jobs:
@@ -15,22 +13,13 @@ jobs:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
 
     steps:
-      - name: Fix Ubuntu 24.04 audio library
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y libasound2t64
-          sudo ln -sf /usr/lib/x86_64-linux-gnu/libasound.so.2 /usr/lib/x86_64-linux-gnu/libasound.so 2>/dev/null || true
-
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          python3 -m pip install --upgrade pip
+          pip3 install httpx beautifulsoup4 lxml gspread google-auth
 
       - name: Run scraper
         env:
@@ -44,7 +33,7 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GMAIL_ADDRESS:               ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD:          ${{ secrets.GMAIL_APP_PASSWORD }}
-        run: python main.py
+        run: python3 main.py
 
       - name: Notify on failure
         if: failure()
