@@ -37,7 +37,7 @@ class JustEatScraper:
             soup = BeautifulSoup(resp.text, "html.parser")
             token_tag = soup.find("input", {"name": "__RequestVerificationToken"})
             if not token_tag:
-                print("[JustEat] Could not find CSRF token on login page")
+                # JustEat ES uses magic-link login — public scraping still works without session
                 return False
 
             token = token_tag.get("value", "")

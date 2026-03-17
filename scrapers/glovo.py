@@ -33,25 +33,38 @@ class GlovoScraper:
 
     def login(self) -> bool:
         """Log in to Glovo and get auth token."""
-        try:
-            payload = {"email": self.email, "password": self.password}
-            resp = self.session.post(
-                "https://api.glovoapp.com/oauth/token",
-                json=payload,
-                headers={**BASE_HEADERS, "Content-Type": "application/json"},
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                self.auth_token = data.get("accessToken") or data.get("access_token")
-                if self.auth_token:
-                    self.session.headers.update({"Authorization": f"Bearer {self.auth_token}"})
-                    print("[Glovo] Login OK")
-                    return True
-            print(f"[Glovo] Login failed: HTTP {resp.status_code}")
-            return False
-        except Exception as e:
-            print(f"[Glovo] Login error: {e}")
-            return False
+        login_headers = {
+            **BASE_HEADERS,
+            "Content-Type": "application/json",
+            "glovo-api-version": "18",
+        }
+        # Try camelCase payload (newer API format)
+        for payload in [
+            {"grantType": "password", "email": self.email, "password": self.password},
+            {"grant_type": "password", "username": self.email, "password": self.password, "client_id": "customer_oauth_client"},
+            {"email": self.email, "password": self.password},
+        ]:
+            try:
+                resp = self.session.post(
+                    "https://api.glovoapp.com/oauth/token",
+                    json=payload,
+                    headers=login_headers,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    self.auth_token = data.get("accessToken") or data.get("access_token")
+                    if self.auth_token:
+                        self.session.headers.update({"Authorization": f"Bearer {self.auth_token}"})
+                        print("[Glovo] Login OK")
+                        return True
+                elif resp.status_code not in (400, 401, 422):
+                    print(f"[Glovo] Login failed: HTTP {resp.status_code}")
+                    break
+            except Exception as e:
+                print(f"[Glovo] Login error: {e}")
+                break
+        print("[Glovo] Login failed — will try unauthenticated scraping")
+        return False
 
     def scrape_store(self, partner_name: str) -> Optional[dict]:
         """Scrape a single Glovo store via their API."""

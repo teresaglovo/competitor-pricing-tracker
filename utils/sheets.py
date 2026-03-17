@@ -46,7 +46,7 @@ class SheetsWriter:
         self.client = gspread.authorize(creds)
         self.spreadsheet = self.client.open_by_key(self.sheet_id)
 
-    def _get_or_create_sheet(self, sheet_name: str = "raw_data") -> gspread.Worksheet:
+    def _get_or_create_sheet(self, sheet_name: str = "Competitors promos & pricing") -> gspread.Worksheet:
         """Get the main data worksheet."""
         try:
             return self.spreadsheet.worksheet(sheet_name)
@@ -80,7 +80,7 @@ class SheetsWriter:
             for c in competitors_config["competitors"]
         }
 
-        ws = self._get_or_create_sheet("raw_data")
+        ws = self._get_or_create_sheet("Competitors promos & pricing")
         rows_to_append = []
 
         for result in results:
