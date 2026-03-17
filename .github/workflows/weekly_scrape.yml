@@ -8,34 +8,18 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    container:
+      image: python:3.12-slim
     timeout-minutes: 30
-    env:
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
-      PLAYWRIGHT_BROWSERS_PATH: /dev/null
 
     steps:
-      - name: Fix libasound2 for Ubuntu 24.04
-        run: |
-          sudo apt-get install -y equivs --no-install-recommends
-          cd /tmp
-          cat > libasound2-dummy.control << 'EOF'
-          Package: libasound2
-          Version: 99.0.0
-          Architecture: amd64
-          Maintainer: dummy
-          Description: dummy libasound2 for Ubuntu 24.04 playwright compat
-          Provides: libasound2
-          EOF
-          equivs-build libasound2-dummy.control
-          sudo dpkg -i libasound2_99.0.0_amd64.deb
-
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install httpx beautifulsoup4 lxml gspread google-auth
+          pip install --upgrade pip
+          pip install httpx beautifulsoup4 lxml gspread google-auth
 
       - name: Run scraper
         env:
@@ -49,4 +33,4 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GMAIL_ADDRESS:               ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD:          ${{ secrets.GMAIL_APP_PASSWORD }}
-        run: python3 main.py
+        run: python main.py
