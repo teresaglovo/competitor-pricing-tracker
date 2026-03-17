@@ -4,11 +4,19 @@ Sends the Monday morning summary email with the Google Sheet link.
 Uses Gmail SMTP with the dedicated Gmail account.
 """
 
+import html as html_lib
 import os
 import smtplib
 from datetime import date
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+
+
+def _e(val) -> str:
+    """HTML-escape a value for safe insertion into email HTML."""
+    if val is None:
+        return "—"
+    return html_lib.escape(str(val))
 
 
 def get_week_label() -> str:
@@ -33,14 +41,19 @@ def send_weekly_email(
     for r in results_summary.get("results", []):
         status = "✅" if r.get("df") else "⚠️"
         promo = "🟢" if r.get("promo_menu") == "YES" else "⭕"
+        comments = r.get("comments") or ""
+        # Truncate long comments so the table stays readable
+        if len(comments) > 80:
+            comments = comments[:77] + "..."
+        row_bg = "#f9f9f9" if rows_html.count("<tr") % 2 == 0 else "#ffffff"
         rows_html += f"""
-        <tr>
-            <td>{status} {r.get('partner','')}</td>
-            <td>{r.get('platform','')}</td>
-            <td>{r.get('df') or '—'}</td>
-            <td>{r.get('sf') or '—'}</td>
-            <td>{r.get('mbs') or '—'}</td>
-            <td>{promo} {r.get('comments') or '—'}</td>
+        <tr style="background:{row_bg};">
+            <td style="padding:6px 8px;">{status} {_e(r.get('partner'))}</td>
+            <td style="padding:6px 8px;">{_e(r.get('platform'))}</td>
+            <td style="padding:6px 8px;">{_e(r.get('df'))}</td>
+            <td style="padding:6px 8px;">{_e(r.get('sf'))}</td>
+            <td style="padding:6px 8px;">{_e(r.get('mbs'))}</td>
+            <td style="padding:6px 8px;">{promo} {_e(comments) if comments else '—'}</td>
         </tr>"""
 
     total = results_summary.get("total", 0)

@@ -199,58 +199,89 @@ class UberEatsScraper:
         # Unescape escaped JSON
         h = html.replace('\\"', '"').replace("\\'", "'")
 
+        # Unescape Unicode-escaped quotes (\u0022 → ") common in UberEats HTML
+        h = h.replace("\\u0022", '"').replace("\\u003e", ">").replace("\\u003c", "<")
+
         if debug:
             print(f"[UberEats DEBUG] HTML size: {len(html)} chars")
-            keywords = ["deliveryFee", "serviceFee", "minOrderSize", "fareInfo", "deliveryCost"]
+            keywords = [
+                "deliveryFeeCents", "deliveryFeeStr", "deliveryFee",
+                "serviceFeeCents", "serviceFee", "fareInfo",
+                "minOrderSize", "smallOrderFee", "deliveryCost",
+                "hasStorePromotion", "storeInfo",
+            ]
             found = set()
             for kw in keywords:
                 for m in re.finditer(re.escape(kw), h, re.IGNORECASE):
                     start = max(0, m.start() - 20)
-                    end = min(len(h), m.end() + 120)
+                    end = min(len(h), m.end() + 150)
                     snippet = h[start:end].replace("\n", " ")
                     if snippet not in found:
                         found.add(snippet)
                         print(f"[UberEats DEBUG] ...{snippet}...")
-                        if len(found) >= 10:
-                            break
+                    if len(found) >= 20:
+                        break
+                if len(found) >= 20:
+                    break
 
-        # Search for delivery fee
+        # Search for delivery fee — UberEats uses cents (149 = €1.49)
         df = None
         for pat in [
-            r'"deliveryFee"\s*:\s*\{\s*"value"\s*:\s*([\d.]+)',
-            r'"deliveryFee"\s*:\s*([\d.]+)',
-            r'"fareInfo"[^}]{0,50}"deliveryFee"\s*:\s*([\d.]+)',
+            r'"deliveryFeeCents"\s*:\s*(\d+)',          # primary: cents
+            r'"deliveryFeeStr"\s*:\s*"([^"]+)"',        # formatted string e.g. "€1.49"
+            r'"deliveryFee"\s*:\s*\{[^}]*"value"\s*:\s*(\d+)',
+            r'"deliveryFee"\s*:\s*(\d+(?:\.\d+)?)',
         ]:
             m = re.search(pat, h)
             if m:
                 try:
-                    v = float(m.group(1))
-                    if v >= 100:
-                        v = v / 100
-                    if 0 <= v <= 15:
-                        df = f"€{v:.2f}"
-                        break
+                    raw = m.group(1)
+                    # Is it a formatted string like "€1.49"?
+                    if re.match(r'[€$]', raw):
+                        df = raw if raw.startswith("€") else f"€{raw[1:]}"
+                    else:
+                        v = float(raw)
+                        if v >= 100:
+                            v = v / 100  # cents to euros
+                        if 0 <= v <= 15:
+                            df = f"€{v:.2f}"
+                    break
                 except Exception:
                     continue
 
-        mbs = None
-        m = re.search(r'"minOrderSize"\s*:\s*([\d.]+)', h)
+        # Service fee
+        sf = None
+        m = re.search(r'"serviceFeeCents"\s*:\s*(\d+)', h)
         if m:
             try:
-                v = float(m.group(1))
-                if v >= 100:
-                    v = v / 100
+                v = float(m.group(1)) / 100
+                if v > 0:
+                    sf = f"€{v:.2f}"
+            except Exception:
+                pass
+
+        mbs = None
+        m = re.search(r'"minOrderSize"\s*:\s*(\d+)', h)
+        if m:
+            try:
+                v = float(m.group(1)) / 100
                 mbs = f"Pedido mínimo €{v:.2f}"
             except Exception:
                 pass
 
-        if df is None and mbs is None:
+        # Promotion detection
+        has_promo = "NO"
+        m = re.search(r'"hasStorePromotion"\s*:\s*(true|false)', h)
+        if m and m.group(1) == "true":
+            has_promo = "YES"
+
+        if df is None and mbs is None and has_promo == "NO":
             return None
 
         return {
             "partner": partner_name, "platform": "UberEats",
-            "df": df, "sf": None, "mbs": mbs,
-            "df_promo": "NO", "promo_menu": "NO",
+            "df": df, "sf": sf, "mbs": mbs,
+            "df_promo": "NO", "promo_menu": has_promo,
             "promocode": "NO", "web_promo": None, "comments": None,
             "scraped_at": datetime.utcnow().isoformat(),
             "source": "ubereats_html",
