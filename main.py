@@ -30,13 +30,13 @@ async def run():
     config = load_config()
 
     # --- Credentials from environment (GitHub Secrets) ---
-    justeat_email    = os.environ["JUSTEAT_EMAIL"]
-    justeat_password = os.environ["JUSTEAT_PASSWORD"]
-    ubereats_email   = os.environ["UBEREATS_EMAIL"]
+    # JustEat uses magic link login — no password needed, scrapes public pages
+    justeat_email     = os.environ.get("JUSTEAT_EMAIL", "")
+    ubereats_email    = os.environ["UBEREATS_EMAIL"]
     ubereats_password = os.environ["UBEREATS_PASSWORD"]
-    glovo_email      = os.environ["GLOVO_EMAIL"]
-    glovo_password   = os.environ["GLOVO_PASSWORD"]
-    recipient_email  = os.environ["RECIPIENT_EMAIL"]
+    glovo_email       = os.environ["GLOVO_EMAIL"]
+    glovo_password    = os.environ["GLOVO_PASSWORD"]
+    recipient_email   = os.environ["RECIPIENT_EMAIL"]
 
     all_results = []
     errors = []
@@ -44,7 +44,7 @@ async def run():
     # --- JustEat ---
     print("\n[1/3] JustEat...")
     try:
-        je_scraper = JustEatScraper(justeat_email, justeat_password, config)
+        je_scraper = JustEatScraper(justeat_email, "", config)
         je_results = je_scraper.scrape_all()
         all_results.extend(je_results)
         print(f"      ✅ {len(je_results)} results")
