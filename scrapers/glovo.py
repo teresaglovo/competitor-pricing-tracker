@@ -133,70 +133,55 @@ class GlovoScraper:
 
     def _parse_html(self, partner_name: str, html: str) -> Optional[dict]:
         """
-        Search the full HTML (including RSC payload chunks) for delivery fee data.
-        Next.js App Router embeds server component data as:
-          self.__next_f.push([1,"...<json-like data>..."])
-        We search across the ENTIRE HTML for known fee-related JSON patterns.
+        Search the full HTML for delivery fee data.
+        The data is in RSC/JSON chunks where quotes are backslash-escaped:
+          \"deliveryFeeInfo\":{\"fee\":1.49}
+        We unescape first, then apply standard JSON patterns.
         """
+        # Unescape backslash-escaped JSON embedded in the HTML
+        h = html.replace('\\"', '"').replace("\\'", "'")
+
         df = None
+        sf = None
         mbs = None
         promos = []
 
-        # Delivery fee patterns (Glovo API uses euros, not cents)
-        df_patterns = [
-            # {"deliveryFee":{"amount":1.99,...}}
-            r'"deliveryFee"\s*:\s*\{\s*"amount"\s*:\s*([\d\.]+)',
-            # "delivery_fee":1.99
-            r'"delivery_fee"\s*:\s*([\d\.]+)',
-            # "deliveryFee":1.99
-            r'"deliveryFee"\s*:\s*([\d\.]+)',
-            # "costoDeEnvio":1.99
-            r'"costoDeEnvio"\s*:\s*([\d\.]+)',
-            r'"costoEnvio"\s*:\s*([\d\.]+)',
-            # "fee":1.99 near "delivery"
-            r'"fee"\s*:\s*([\d\.]+)',
-        ]
-        for pat in df_patterns:
-            m = re.search(pat, html)
+        # Delivery fee — primary: deliveryFeeInfo.fee (Glovo's actual field)
+        m = re.search(r'"deliveryFeeInfo"\s*:\s*\{[^}]*"fee"\s*:\s*([\d.]+)', h)
+        if m:
+            df = f"€{float(m.group(1)):.2f}"
+
+        # Fallback: deliveryFeeValue string field
+        if not df:
+            m = re.search(r'"deliveryFeeValue"\s*:\s*"([\d.]+)"', h)
             if m:
-                try:
-                    val = float(m.group(1))
-                    if 0 <= val <= 15:   # sanity check: fee should be < €15
-                        df = f"€{val:.2f}"
-                        break
-                except Exception:
-                    continue
+                df = f"€{float(m.group(1)):.2f}"
+
+        # Service fee
+        m = re.search(r'"serviceFee"\s*:\s*([\d.]+)', h)
+        if m:
+            val = float(m.group(1))
+            if val > 0:
+                sf = f"€{val:.2f}"
 
         # Minimum basket
-        mbs_patterns = [
-            r'"minimumBasketSurcharge"\s*:\s*\{\s*"amount"\s*:\s*([\d\.]+)[^}]*"threshold"\s*:\s*([\d\.]+)',
-            r'"minimumBasket"\s*:\s*([\d\.]+)',
-        ]
-        for pat in mbs_patterns:
-            m = re.search(pat, html)
-            if m:
-                try:
-                    if len(m.groups()) == 2:
-                        amount = float(m.group(1))
-                        threshold = float(m.group(2))
-                        mbs = f"If < €{threshold:.2f}, surcharge €{amount:.2f}"
-                    else:
-                        val = float(m.group(1))
-                        mbs = f"Pedido mínimo €{val:.2f}"
-                    break
-                except Exception:
-                    continue
-
-        # Promotions
-        promo_matches = re.findall(
-            r'"(?:description|label|title)"\s*:\s*"([^"]{5,80})"',
-            html
+        m = re.search(
+            r'"minimumBasketSurcharge"\s*:\s*\{[^}]*"amount"\s*:\s*([\d.]+)[^}]*"threshold"\s*:\s*([\d.]+)', h
         )
-        for desc in promo_matches[:10]:
+        if m:
+            mbs = f"If < €{float(m.group(2)):.2f}, surcharge €{float(m.group(1)):.2f}"
+
+        # Promotions — look in the unescaped HTML
+        promo_matches = re.findall(r'"(?:description|label|title)"\s*:\s*"([^"]{5,100})"', h)
+        seen = set()
+        for desc in promo_matches:
             low = desc.lower()
             if any(w in low for w in ["gratis", "envío", "envio", "promo", "descuento", "oferta", "free", "% "]):
-                if desc not in promos:
+                if desc not in seen:
+                    seen.add(desc)
                     promos.append(desc)
+            if len(promos) >= 5:
+                break
 
         if df is None and mbs is None and not promos:
             return None
@@ -209,7 +194,7 @@ class GlovoScraper:
 
         return {
             "partner": partner_name, "platform": "Glovo",
-            "df": df, "sf": None, "mbs": mbs,
+            "df": df, "sf": sf, "mbs": mbs,
             "df_promo": df_promo, "promo_menu": has_promo,
             "promocode": "NO", "web_promo": None,
             "comments": " | ".join(promos) if promos else None,

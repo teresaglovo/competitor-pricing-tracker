@@ -68,12 +68,14 @@ class JustEatScraper:
         for url in endpoints:
             try:
                 resp = self.session.get(url, headers=API_HEADERS)
+                print(f"[JustEat]   API {url[:60]}... → HTTP {resp.status_code}")
                 if resp.status_code == 200:
                     data = resp.json()
                     restaurant = data.get("restaurant") or data
                     if isinstance(restaurant, dict) and restaurant.get("name"):
                         return self._parse_api(partner_name, restaurant)
-            except Exception:
+            except Exception as e:
+                print(f"[JustEat]   API error: {e}")
                 continue
         return None
 
@@ -122,7 +124,7 @@ class JustEatScraper:
     # ── HTML approach ────────────────────────────────────────────────
 
     def _fetch_from_html(self, partner_name: str, slug: str) -> Optional[dict]:
-        """Search the full HTML for embedded delivery fee data."""
+        """Search the full HTML for embedded delivery fee data (including escaped JSON)."""
         url = f"https://www.just-eat.es/restaurants-{slug}/menu"
         try:
             resp = self.session.get(url, headers=HTML_HEADERS)
@@ -132,43 +134,60 @@ class JustEatScraper:
         except Exception:
             return None
 
-        # Search for delivery fee in various JSON patterns in the HTML
-        # These appear in hydration data / inline scripts
-        patterns = [
-            # "deliveryCost":199  (cents)
-            r'"deliveryCost"\s*:\s*(\d+)',
-            # "deliveryFee":{"amount":1.99}
-            r'"deliveryFee"\s*:\s*\{\s*"amount"\s*:\s*([\d\.]+)',
-            # "deliveryFee":1.99
-            r'"deliveryFee"\s*:\s*([\d\.]+)',
-            # "deliveryCost":1.99
-            r'"deliveryCost"\s*:\s*([\d\.]+)',
+        # Unescape backslash-escaped JSON that appears in inline scripts / RSC chunks
+        h = html.replace('\\"', '"').replace("\\'", "'")
+
+        # Debug for first store only
+        if not hasattr(self, '_html_debug_done'):
+            self._html_debug_done = True
+            print(f"[JustEat DEBUG] HTML size: {len(html)} chars, searching for fee keywords...")
+            keywords = ["deliveryCost", "deliveryFee", "minimumOrderAmount",
+                        "serviceFee", "envío", "envio", "delivery"]
+            found = set()
+            for kw in keywords:
+                for m in re.finditer(re.escape(kw), h, re.IGNORECASE):
+                    start = max(0, m.start() - 20)
+                    end = min(len(h), m.end() + 120)
+                    snippet = h[start:end].replace("\n", " ")
+                    if snippet not in found:
+                        found.add(snippet)
+                        print(f"[JustEat DEBUG] ...{snippet}...")
+                        if len(found) >= 15:
+                            break
+                if len(found) >= 15:
+                    break
+
+        # Delivery fee patterns (try both plain euros and cents)
+        df_patterns = [
+            r'"deliveryCost"\s*:\s*(\d+(?:\.\d+)?)',
+            r'"deliveryFee"\s*:\s*\{[^}]*"amount"\s*:\s*([\d.]+)',
+            r'"deliveryFee"\s*:\s*([\d.]+)',
         ]
         df = None
-        for pat in patterns:
-            m = re.search(pat, html)
+        for pat in df_patterns:
+            m = re.search(pat, h)
             if m:
                 try:
                     val = float(m.group(1))
-                    # If > 50 and no decimal in original, probably cents
-                    if val >= 100 and "." not in m.group(1):
-                        val = val / 100
-                    df = f"€{val:.2f}"
-                    break
+                    if val >= 100 and m.group(1).isdigit():
+                        val = val / 100  # convert cents
+                    if 0 <= val <= 15:
+                        df = f"€{val:.2f}"
+                        break
                 except Exception:
                     continue
 
         mbs = None
         mbs_patterns = [
-            r'"minimumOrderAmount"\s*:\s*(\d+)',
-            r'"minimumOrderAmount"\s*:\s*([\d\.]+)',
+            r'"minimumOrderAmount"\s*:\s*(\d+(?:\.\d+)?)',
+            r'"minimumOrderValue"\s*:\s*(\d+(?:\.\d+)?)',
         ]
         for pat in mbs_patterns:
-            m = re.search(pat, html)
+            m = re.search(pat, h)
             if m:
                 try:
                     val = float(m.group(1))
-                    if val >= 100 and "." not in m.group(1):
+                    if val >= 100 and m.group(1).isdigit():
                         val = val / 100
                     mbs = f"Pedido mínimo €{val:.2f}"
                     break
