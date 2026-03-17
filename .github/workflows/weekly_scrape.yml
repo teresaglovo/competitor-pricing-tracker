@@ -15,6 +15,12 @@ jobs:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
 
     steps:
+      - name: Fix Ubuntu 24.04 audio library
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libasound2t64
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/libasound.so.2 /usr/lib/x86_64-linux-gnu/libasound.so 2>/dev/null || true
+
       - name: Checkout code
         uses: actions/checkout@v4
 
