@@ -1,7 +1,9 @@
 """
-Glovo scraper — debug version.
-Logs HTTP status + first 3000 chars of __NEXT_DATA__ for the first store
-so we can see exactly what structure the page returns.
+Glovo scraper.
+The web app uses Next.js App Router (no __NEXT_DATA__), so delivery fee data
+is embedded as RSC (React Server Component) payload in inline <script> chunks.
+We search the full HTML for delivery-fee JSON patterns.
+Also tries the Glovo REST API with and without auth.
 """
 
 import httpx
@@ -12,22 +14,25 @@ from datetime import datetime
 from typing import Optional
 
 
-BASE_HEADERS = {
+HTML_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
     "Accept-Language": "es-ES,es;q=0.9",
-    "glovo-app-type": "WEB",
-    "glovo-app-version": "7.106.0",
-    "glovo-location-city-code": "MAD",
     "Referer": "https://glovoapp.com/",
-    "Origin": "https://glovoapp.com",
 }
 
 API_HEADERS = {
-    **BASE_HEADERS,
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept": "application/json",
+    "Accept-Language": "es-ES,es;q=0.9",
+    "glovo-app-type": "WEB",
+    "glovo-app-version": "7.106.0",
+    "glovo-location-city-code": "MAD",
     "glovo-api-version": "18",
+    "Referer": "https://glovoapp.com/",
+    "Origin": "https://glovoapp.com",
 }
 
 LAT = "40.4575"
@@ -42,13 +47,12 @@ class GlovoScraper:
         self.email = email
         self.password = password
         self.stores = competitors_config["platforms"]["glovo"]["stores"]
-        self.session = httpx.Client(headers=BASE_HEADERS, follow_redirects=True, timeout=25)
+        self.session = httpx.Client(follow_redirects=True, timeout=25)
         self.auth_token = None
 
     # ── Login ────────────────────────────────────────────────────────
 
     def login(self) -> bool:
-        login_headers = {**API_HEADERS, "Content-Type": "application/json"}
         payloads = [
             {"grantType": "password", "email": self.email, "password": self.password},
             {"grant_type": "password", "email": self.email, "password": self.password},
@@ -59,9 +63,8 @@ class GlovoScraper:
                 resp = self.session.post(
                     "https://api.glovoapp.com/oauth/token",
                     json=payload,
-                    headers=login_headers,
+                    headers={**API_HEADERS, "Content-Type": "application/json"},
                 )
-                print(f"[Glovo] Login attempt HTTP {resp.status_code}")
                 if resp.status_code == 200:
                     data = resp.json()
                     token = data.get("accessToken") or data.get("access_token")
@@ -70,7 +73,7 @@ class GlovoScraper:
                         self.session.headers.update({"Authorization": f"Bearer {token}"})
                         print("[Glovo] Login OK")
                         return True
-                elif resp.status_code not in (400, 401, 422):
+                elif resp.status_code not in (400, 401, 403, 422):
                     break
             except Exception as e:
                 print(f"[Glovo] Login error: {e}")
@@ -86,66 +89,38 @@ class GlovoScraper:
         slug = store_config.get("slug", "")
         store_id = store_config.get("store_id", "")
 
-        # Try by store_id first (only if we have one)
+        # 1. Try REST API by store_id (authenticated or public)
         if store_id:
             result = self._fetch_by_id(partner_name, store_id)
             if result:
                 return result
 
-        # Try web page (multiple URL patterns)
+        # 2. Scrape web page — search full HTML for fee data
         if slug:
-            url_patterns = [
-                f"https://glovoapp.com/es/es/madrid/{slug}/",
-                f"https://glovoapp.com/es/es/madrid-centro/{slug}/",
-                f"https://glovoapp.com/es/es/mad/{slug}/",
-            ]
-            for url in url_patterns:
-                try:
-                    resp = self.session.get(url, headers=BASE_HEADERS)
-                    print(f"[Glovo]   {url} → HTTP {resp.status_code}")
-                    if resp.status_code != 200:
-                        continue
-
+            url = f"https://glovoapp.com/es/es/madrid/{slug}/"
+            try:
+                resp = self.session.get(url, headers=HTML_HEADERS)
+                if resp.status_code == 200:
                     html = resp.text
 
-                    # Debug: print __NEXT_DATA__ structure for first store
+                    # Debug: print fee-related content from full HTML for first store
                     if not _debug_done:
                         _debug_done = True
-                        nd_match = re.search(
-                            r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>',
-                            html, re.DOTALL
-                        )
-                        if nd_match:
-                            try:
-                                nd = json.loads(nd_match.group(1))
-                                raw = json.dumps(nd)
-                                props = nd.get("props", {})
-                                pp = props.get("pageProps", {})
-                                print(f"[Glovo DEBUG] __NEXT_DATA__ keys: {list(nd.keys())}")
-                                print(f"[Glovo DEBUG] props keys: {list(props.keys())}")
-                                print(f"[Glovo DEBUG] pageProps keys: {list(pp.keys())}")
-                                print(f"[Glovo DEBUG] first 3000 chars:\n{raw[:3000]}")
-                            except Exception:
-                                print("[Glovo DEBUG] Failed to parse __NEXT_DATA__")
-                        else:
-                            print(f"[Glovo DEBUG] No __NEXT_DATA__. HTML snippet:\n{html[:2000]}")
+                        self._debug_html(partner_name, html)
 
                     result = self._parse_html(partner_name, html)
                     if result:
                         return result
-
-                except Exception as e:
-                    print(f"[Glovo] Error for {partner_name} ({url}): {e}")
-                    continue
+            except Exception as e:
+                print(f"[Glovo] HTML error for {partner_name}: {e}")
 
         return None
 
     def _fetch_by_id(self, partner_name: str, store_id: str) -> Optional[dict]:
-        urls = [
+        for url in [
             f"https://api.glovoapp.com/v3/stores/{store_id}?latitude={LAT}&longitude={LON}",
             f"https://api.glovoapp.com/v3/stores/{store_id}",
-        ]
-        for url in urls:
+        ]:
             try:
                 resp = self.session.get(url, headers=API_HEADERS)
                 if resp.status_code == 200:
@@ -154,70 +129,93 @@ class GlovoScraper:
                 continue
         return None
 
-    def _parse_html(self, partner_name: str, html: str) -> Optional[dict]:
-        # Try __NEXT_DATA__
-        nd_match = re.search(
-            r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL
-        )
-        if nd_match:
-            try:
-                nd = json.loads(nd_match.group(1))
-                result = self._extract_from_next_data(partner_name, nd)
-                if result:
-                    return result
-            except Exception:
-                pass
+    # ── HTML parsing ─────────────────────────────────────────────────
 
-        # Look for delivery fee patterns in raw HTML
-        for pattern in [
+    def _parse_html(self, partner_name: str, html: str) -> Optional[dict]:
+        """
+        Search the full HTML (including RSC payload chunks) for delivery fee data.
+        Next.js App Router embeds server component data as:
+          self.__next_f.push([1,"...<json-like data>..."])
+        We search across the ENTIRE HTML for known fee-related JSON patterns.
+        """
+        df = None
+        mbs = None
+        promos = []
+
+        # Delivery fee patterns (Glovo API uses euros, not cents)
+        df_patterns = [
+            # {"deliveryFee":{"amount":1.99,...}}
             r'"deliveryFee"\s*:\s*\{\s*"amount"\s*:\s*([\d\.]+)',
+            # "delivery_fee":1.99
             r'"delivery_fee"\s*:\s*([\d\.]+)',
-            r'[Ee]nv[íi]o[^<]{0,30}?€\s*([\d]+[,\.][\d]{2})',
-        ]:
-            m = re.search(pattern, html)
+            # "deliveryFee":1.99
+            r'"deliveryFee"\s*:\s*([\d\.]+)',
+            # "costoDeEnvio":1.99
+            r'"costoDeEnvio"\s*:\s*([\d\.]+)',
+            r'"costoEnvio"\s*:\s*([\d\.]+)',
+            # "fee":1.99 near "delivery"
+            r'"fee"\s*:\s*([\d\.]+)',
+        ]
+        for pat in df_patterns:
+            m = re.search(pat, html)
             if m:
                 try:
-                    val = float(m.group(1).replace(",", "."))
-                    return self._build(partner_name, df=f"€{val:.2f}", source="glovo_html")
+                    val = float(m.group(1))
+                    if 0 <= val <= 15:   # sanity check: fee should be < €15
+                        df = f"€{val:.2f}"
+                        break
                 except Exception:
-                    pass
+                    continue
 
-        return None
+        # Minimum basket
+        mbs_patterns = [
+            r'"minimumBasketSurcharge"\s*:\s*\{\s*"amount"\s*:\s*([\d\.]+)[^}]*"threshold"\s*:\s*([\d\.]+)',
+            r'"minimumBasket"\s*:\s*([\d\.]+)',
+        ]
+        for pat in mbs_patterns:
+            m = re.search(pat, html)
+            if m:
+                try:
+                    if len(m.groups()) == 2:
+                        amount = float(m.group(1))
+                        threshold = float(m.group(2))
+                        mbs = f"If < €{threshold:.2f}, surcharge €{amount:.2f}"
+                    else:
+                        val = float(m.group(1))
+                        mbs = f"Pedido mínimo €{val:.2f}"
+                    break
+                except Exception:
+                    continue
 
-    def _extract_from_next_data(self, partner_name: str, nd: dict) -> Optional[dict]:
-        props = nd.get("props", {})
-        pp = props.get("pageProps", {})
+        # Promotions
+        promo_matches = re.findall(
+            r'"(?:description|label|title)"\s*:\s*"([^"]{5,80})"',
+            html
+        )
+        for desc in promo_matches[:10]:
+            low = desc.lower()
+            if any(w in low for w in ["gratis", "envío", "envio", "promo", "descuento", "oferta", "free", "% "]):
+                if desc not in promos:
+                    promos.append(desc)
 
-        candidates = []
-        candidates.append(pp.get("store"))
-        candidates.append(pp.get("storeData"))
-        candidates.append(pp.get("initialStore"))
-        candidates.append(pp.get("storeInfo"))
-        candidates.append(pp.get("restaurantData"))
-
-        # Deep search
-        def deep_find(obj, depth=0):
-            if depth > 6 or not isinstance(obj, dict):
-                return None
-            for key in ("deliveryFee", "delivery_fee", "minimumBasketSurcharge"):
-                if key in obj:
-                    return obj
-            for v in obj.values():
-                result = deep_find(v, depth + 1)
-                if result:
-                    return result
+        if df is None and mbs is None and not promos:
             return None
 
-        candidates.append(deep_find(nd))
+        has_promo = "YES" if promos else "NO"
+        df_promo = "YES" if any(
+            w in " ".join(promos).lower()
+            for w in ["delivery", "envío", "envio", "gratis", "free", "0€"]
+        ) else "NO"
 
-        for candidate in candidates:
-            if not candidate or not isinstance(candidate, dict):
-                continue
-            result = self._parse_api(partner_name, candidate)
-            if result and (result.get("df") or result.get("mbs")):
-                return result
-
-        return None
+        return {
+            "partner": partner_name, "platform": "Glovo",
+            "df": df, "sf": None, "mbs": mbs,
+            "df_promo": df_promo, "promo_menu": has_promo,
+            "promocode": "NO", "web_promo": None,
+            "comments": " | ".join(promos) if promos else None,
+            "scraped_at": datetime.utcnow().isoformat(),
+            "source": "glovo_html",
+        }
 
     def _parse_api(self, partner_name: str, data: dict) -> dict:
         store = data.get("store") or data.get("storeInfo") or data
@@ -232,23 +230,12 @@ class GlovoScraper:
         elif isinstance(fee, (int, float)):
             df = f"€{float(fee):.2f}"
 
-        sf_val = store.get("serviceFee") or store.get("service_fee")
-        if sf_val is not None:
-            try:
-                val = float(sf_val)
-                if val > 0:
-                    sf = f"€{val:.2f}"
-            except Exception:
-                pass
-
         mbs_data = store.get("minimumBasketSurcharge") or store.get("minimumBasket") or {}
         if isinstance(mbs_data, dict):
             amount = mbs_data.get("amount")
             threshold = mbs_data.get("threshold") or mbs_data.get("applies_below")
             if amount and threshold:
                 mbs = f"If < €{float(threshold):.2f}, surcharge €{float(amount):.2f}"
-        elif isinstance(mbs_data, (int, float)) and mbs_data > 0:
-            mbs = f"Pedido mínimo €{float(mbs_data):.2f}"
 
         for promo in (store.get("promotions") or store.get("promos") or []):
             if isinstance(promo, dict):
@@ -256,17 +243,12 @@ class GlovoScraper:
                 if desc:
                     promos.append(str(desc))
 
-        return self._build(partner_name, df=df, sf=sf, mbs=mbs,
-                           promos=promos, source="glovo_api")
-
-    def _build(self, partner_name: str, df=None, sf=None, mbs=None,
-               promos=None, source="glovo") -> dict:
-        promos = promos or []
         has_promo = "YES" if promos else "NO"
         df_promo = "YES" if any(
             w in " ".join(promos).lower()
             for w in ["delivery", "envío", "envio", "gratis", "free", "0€"]
         ) else "NO"
+
         return {
             "partner": partner_name, "platform": "Glovo",
             "df": df, "sf": sf, "mbs": mbs,
@@ -274,8 +256,31 @@ class GlovoScraper:
             "promocode": "NO", "web_promo": None,
             "comments": " | ".join(promos) if promos else None,
             "scraped_at": datetime.utcnow().isoformat(),
-            "source": source,
+            "source": "glovo_api",
         }
+
+    # ── Debug ─────────────────────────────────────────────────────────
+
+    def _debug_html(self, partner_name: str, html: str):
+        """Print lines containing fee-related keywords from the full HTML."""
+        print(f"[Glovo DEBUG] Searching full HTML ({len(html)} chars) for {partner_name}")
+        keywords = ["deliveryFee", "delivery_fee", "deliveryCost", "costoEnvio",
+                    "minimumBasket", "envío", "envio", "promo", "fee"]
+        found_lines = set()
+        for kw in keywords:
+            for m in re.finditer(re.escape(kw), html, re.IGNORECASE):
+                start = max(0, m.start() - 20)
+                end = min(len(html), m.end() + 100)
+                snippet = html[start:end].replace("\n", " ")
+                if snippet not in found_lines:
+                    found_lines.add(snippet)
+                    print(f"[Glovo DEBUG] ...{snippet}...")
+                    if len(found_lines) >= 20:
+                        return
+        if not found_lines:
+            print(f"[Glovo DEBUG] No fee-related keywords found in HTML")
+
+    # ── Main ──────────────────────────────────────────────────────────
 
     def scrape_all(self) -> list[dict]:
         self.login()
