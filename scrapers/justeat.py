@@ -1,178 +1,234 @@
 """
-JustEat Spain scraper.
-Uses es.fd-api.com — the same REST API the JustEat web app calls internally.
-No login required; fees and promos are public.
+JustEat Spain scraper — HTML + __NEXT_DATA__ based.
 """
 
 import httpx
+import json
 import re
 from datetime import datetime
 from typing import Optional
 from bs4 import BeautifulSoup
 
 
-API_HEADERS = {
+HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "application/json",
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
     "Accept-Language": "es-ES,es;q=0.9",
-    "Accept-Tenant": "es",
-    "Origin": "https://www.just-eat.es",
     "Referer": "https://www.just-eat.es/",
 }
 
-HTML_HEADERS = {
-    **API_HEADERS,
-    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-}
+_debug_done = False   # print deep debug only for the first store
 
 
 class JustEatScraper:
     def __init__(self, email: str, password: str, competitors_config: dict):
         self.stores = competitors_config["platforms"]["justeat"]["stores"]
-        self.session = httpx.Client(headers=API_HEADERS, follow_redirects=True, timeout=30)
+        self.session = httpx.Client(headers=HEADERS, follow_redirects=True, timeout=30)
 
     def login(self) -> bool:
-        # JustEat ES uses magic-link login — not needed for public fee data
-        return True
+        return True  # no login needed for public pages
 
     def scrape_store(self, partner_name: str) -> Optional[dict]:
+        global _debug_done
         store_config = self.stores.get(partner_name)
         if not store_config or store_config.get("slug") == "TODO":
             return None
 
         slug = store_config["slug"]
-
-        # Primary: fd-api (returns fees directly)
-        result = self._fetch_from_api(partner_name, slug)
-        if result:
-            return result
-
-        # Fallback: HTML page with __NEXT_DATA__
-        result = self._fetch_from_html(partner_name, slug)
-        if result:
-            return result
-
-        print(f"[JustEat] Could not extract data for {partner_name}")
-        return None
-
-    def _fetch_from_api(self, partner_name: str, slug: str) -> Optional[dict]:
-        """Call JustEat's internal fd-api to get restaurant + fee data."""
-        endpoints = [
-            f"https://es.fd-api.com/restaurants/byslug/{slug}",
-            f"https://consumer-web.fd-api.com/restaurants/byslug/{slug}?country=es",
-        ]
-        for url in endpoints:
-            try:
-                resp = self.session.get(url, headers=API_HEADERS)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    # fd-api wraps in {"restaurant": {...}} or returns directly
-                    restaurant = data.get("restaurant") or data
-                    if restaurant.get("name"):
-                        return self._parse_api_response(partner_name, restaurant)
-            except Exception:
-                continue
-        return None
-
-    def _fetch_from_html(self, partner_name: str, slug: str) -> Optional[dict]:
-        """Fallback: scrape the JustEat store HTML page."""
         url = f"https://www.just-eat.es/restaurants-{slug}/menu"
+
         try:
-            resp = self.session.get(url, headers=HTML_HEADERS)
+            resp = self.session.get(url)
+            print(f"[JustEat]   HTTP {resp.status_code} for {partner_name}")
             if resp.status_code != 200:
                 return None
 
-            # Look for __NEXT_DATA__
-            match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', resp.text, re.DOTALL)
-            if match:
-                import json
+            html = resp.text
+
+            # ── Extract __NEXT_DATA__ ──────────────────────────────────
+            nd_match = re.search(
+                r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL
+            )
+            next_data = None
+            if nd_match:
                 try:
-                    page_data = json.loads(match.group(1))
-                    props = page_data.get("props", {}).get("pageProps", {})
-                    restaurant = (
-                        props.get("restaurant")
-                        or props.get("restaurantData")
-                        or props.get("initialData", {}).get("restaurant")
-                    )
-                    if restaurant:
-                        return self._parse_api_response(partner_name, restaurant)
+                    next_data = json.loads(nd_match.group(1))
                 except Exception:
                     pass
 
-            # Last resort: look for delivery cost in raw HTML
-            soup = BeautifulSoup(resp.text, "html.parser")
-            return self._parse_html_fallback(partner_name, soup)
+            # Debug: dump first 3000 chars of __NEXT_DATA__ for the FIRST store
+            if not _debug_done:
+                _debug_done = True
+                if next_data:
+                    raw = json.dumps(next_data)
+                    print(f"[JustEat DEBUG] __NEXT_DATA__ keys: {list(next_data.keys())}")
+                    props = next_data.get("props", {})
+                    print(f"[JustEat DEBUG] props keys: {list(props.keys())}")
+                    pp = props.get("pageProps", {})
+                    print(f"[JustEat DEBUG] pageProps keys: {list(pp.keys())}")
+                    print(f"[JustEat DEBUG] first 3000 chars:\n{raw[:3000]}")
+                else:
+                    # Print beginning of HTML so we can see what the page looks like
+                    print(f"[JustEat DEBUG] No __NEXT_DATA__ found. HTML snippet:\n{html[:2000]}")
+
+            # ── Try to find delivery fee in __NEXT_DATA__ ─────────────
+            if next_data:
+                result = self._extract_from_next_data(partner_name, next_data)
+                if result:
+                    return result
+
+            # ── JSON-LD fallback ──────────────────────────────────────
+            soup = BeautifulSoup(html, "html.parser")
+            for script in soup.find_all("script", {"type": "application/ld+json"}):
+                try:
+                    data = json.loads(script.string or "")
+                    if isinstance(data, list):
+                        data = data[0]
+                    if data.get("@type") in ("Restaurant", "FoodEstablishment"):
+                        # Only use if we have at least some fee data
+                        df = self._get_fee(data, "deliveryFee", "deliveryCost")
+                        mbs = self._get_fee(data, "minimumOrderValue", "minimumOrderAmount", "priceRange")
+                        if df or mbs:
+                            return self._build(partner_name, df=df, mbs=mbs,
+                                               source="justeat_jsonld")
+                except Exception:
+                    continue
+
+            # ── Raw HTML text search ──────────────────────────────────
+            return self._search_html_text(partner_name, html)
 
         except Exception as e:
-            print(f"[JustEat] HTML error for {partner_name}: {e}")
+            print(f"[JustEat] Error scraping {partner_name}: {e}")
+            return None
+
+    # ────────────────────────────────────────────────────────────────
+    # __NEXT_DATA__ extraction — tries every known path
+    # ────────────────────────────────────────────────────────────────
+
+    def _extract_from_next_data(self, partner_name: str, nd: dict) -> Optional[dict]:
+        props = nd.get("props", {})
+        pp = props.get("pageProps", {})
+
+        # Collect candidate restaurant objects from all known paths
+        candidates = []
+
+        # Path 1: pageProps.restaurantData.restaurant
+        r = pp.get("restaurantData", {})
+        if isinstance(r, dict):
+            candidates.append(r.get("restaurant") or r)
+
+        # Path 2: pageProps.restaurant
+        candidates.append(pp.get("restaurant"))
+
+        # Path 3: pageProps.initialState / initialReduxState
+        for key in ("initialState", "initialReduxState"):
+            state = pp.get(key) or {}
+            rest_state = state.get("restaurants") or state.get("restaurant") or {}
+            candidates.append(
+                rest_state.get("restaurant")
+                or rest_state.get("restaurantDetails")
+                or rest_state.get("data")
+            )
+
+        # Path 4: deep search — find any dict with a delivery-related key
+        def deep_find(obj, depth=0):
+            if depth > 6 or not isinstance(obj, dict):
+                return None
+            for key in ("deliveryCost", "deliveryFee", "deliveryCost", "minimumOrderAmount"):
+                if key in obj:
+                    return obj
+            for v in obj.values():
+                if isinstance(v, dict):
+                    result = deep_find(v, depth + 1)
+                    if result:
+                        return result
+                elif isinstance(v, list):
+                    for item in v[:5]:
+                        result = deep_find(item, depth + 1)
+                        if result:
+                            return result
+            return None
+
+        candidates.append(deep_find(nd))
+
+        for candidate in candidates:
+            if not candidate or not isinstance(candidate, dict):
+                continue
+            df = self._get_fee(candidate, "deliveryCost", "deliveryFee",
+                               "delivery_cost", "deliveryAmount")
+            mbs = self._get_fee(candidate, "minimumOrderAmount", "minimumOrderValue",
+                                "minimum_order_amount", "minOrderAmount")
+            sf = self._get_fee(candidate, "serviceFee", "service_fee")
+
+            # Promotions
+            promos = []
+            for promo in (candidate.get("promotions") or candidate.get("offers") or []):
+                if isinstance(promo, dict):
+                    desc = promo.get("description") or promo.get("name") or ""
+                    if desc:
+                        promos.append(str(desc))
+
+            if df or mbs or sf or promos:
+                return self._build(partner_name, df=df, sf=sf, mbs=mbs,
+                                   promos=promos, source="justeat_next")
+
         return None
 
-    def _parse_api_response(self, partner_name: str, data: dict) -> dict:
-        """Parse standardized result from JustEat API/NEXT_DATA response."""
-        df = None
-        mbs = None
-        sf = None
-        promos = []
+    # ────────────────────────────────────────────────────────────────
+    # Raw HTML text search (last resort)
+    # ────────────────────────────────────────────────────────────────
 
-        # Delivery cost (fd-api uses cents, e.g. 199 = €1.99)
-        delivery_cost = (
-            data.get("deliveryCost")
-            or data.get("delivery_cost")
-            or (data.get("deliveryInfo") or {}).get("deliveryCost")
-            or (data.get("deliveryInfo") or {}).get("deliveryFee")
+    def _search_html_text(self, partner_name: str, html: str) -> Optional[dict]:
+        # Pattern: "Envío: €1,99" or "envío gratis"
+        fee_match = re.search(
+            r'[Ee]nv[íi]o[^<]{0,30}?€\s*([\d]+[,\.][\d]{2})', html
         )
-        if delivery_cost is not None:
-            try:
-                val = float(delivery_cost)
-                # fd-api returns cents; values >= 100 with no decimal are likely cents
-                if val >= 100 and isinstance(delivery_cost, int):
-                    val = val / 100
-                df = f"€{val:.2f}"
-            except Exception:
-                df = str(delivery_cost)
+        free_delivery = bool(re.search(
+            r'[Ee]nv[íi]o\s+gratis|free\s+delivery|delivery\s+free', html, re.IGNORECASE
+        ))
+        if fee_match:
+            val = float(fee_match.group(1).replace(",", "."))
+            return self._build(partner_name, df=f"€{val:.2f}", source="justeat_html")
+        if free_delivery:
+            return self._build(partner_name, df="€0.00", source="justeat_html")
+        return None
 
-        # Minimum order
-        min_order = (
-            data.get("minimumOrderAmount")
-            or data.get("minimum_order_amount")
-            or (data.get("deliveryInfo") or {}).get("minimumOrderAmount")
-            or (data.get("deliveryInfo") or {}).get("minimumOrderValue")
-        )
-        if min_order is not None:
-            try:
-                val = float(min_order)
-                if val >= 100 and isinstance(min_order, int):
-                    val = val / 100
-                mbs = f"Pedido mínimo €{val:.2f}"
-            except Exception:
-                mbs = str(min_order)
+    # ────────────────────────────────────────────────────────────────
+    # Helpers
+    # ────────────────────────────────────────────────────────────────
 
-        # Service fee
-        sf_data = data.get("serviceFee") or data.get("service_fee")
-        if sf_data is not None:
-            try:
-                val = float(sf_data)
-                if val >= 100 and isinstance(sf_data, int):
-                    val = val / 100
-                if val > 0:
-                    sf = f"€{val:.2f}"
-            except Exception:
-                pass
+    def _get_fee(self, data: dict, *keys) -> Optional[str]:
+        for key in keys:
+            val = data.get(key)
+            if val is None:
+                continue
+            if isinstance(val, dict):
+                amount = val.get("amount") or val.get("value") or val.get("price")
+                if amount is not None:
+                    return self._format(amount)
+            elif isinstance(val, (int, float, str)):
+                return self._format(val)
+        return None
 
-        # Promotions
-        for promo in (data.get("promotions") or data.get("offers") or []):
-            if isinstance(promo, dict):
-                desc = promo.get("description") or promo.get("name") or promo.get("label") or ""
-                if desc:
-                    promos.append(str(desc))
+    def _format(self, amount) -> str:
+        try:
+            val = float(str(amount).replace(",", "."))
+            # fd-api sometimes returns cents (199 → €1.99)
+            if val > 50 and isinstance(amount, int):
+                val = val / 100
+            return f"€{val:.2f}"
+        except Exception:
+            return str(amount)
 
+    def _build(self, partner_name: str, df=None, sf=None, mbs=None,
+               promos=None, source="justeat") -> dict:
+        promos = promos or []
         has_promo = "YES" if promos else "NO"
         df_promo = "YES" if any(
             w in " ".join(promos).lower()
-            for w in ["delivery", "envío", "envio", "gratis", "free", "0€", "0 €"]
+            for w in ["delivery", "envío", "envio", "gratis", "free", "0€"]
         ) else "NO"
-
         return {
             "partner": partner_name,
             "platform": "JustEat",
@@ -185,34 +241,10 @@ class JustEatScraper:
             "web_promo": None,
             "comments": " | ".join(promos) if promos else None,
             "scraped_at": datetime.utcnow().isoformat(),
-            "source": "justeat_api",
+            "source": source,
         }
 
-    def _parse_html_fallback(self, partner_name: str, soup: BeautifulSoup) -> Optional[dict]:
-        """Try to find fee data anywhere in the rendered HTML."""
-        text = soup.get_text()
-        # Look for delivery fee pattern like "€1,99" or "1.99€"
-        fee_match = re.search(r'[Ee]nvío[^€]*€\s*([\d,\.]+)', text)
-        if fee_match:
-            try:
-                val = float(fee_match.group(1).replace(",", "."))
-                return {
-                    "partner": partner_name,
-                    "platform": "JustEat",
-                    "df": f"€{val:.2f}",
-                    "sf": None, "mbs": None,
-                    "df_promo": "NO", "promo_menu": "NO",
-                    "promocode": "NO", "web_promo": None,
-                    "comments": None,
-                    "scraped_at": datetime.utcnow().isoformat(),
-                    "source": "justeat_html",
-                }
-            except Exception:
-                pass
-        return None
-
     def scrape_all(self) -> list[dict]:
-        """Scrape all configured competitors on JustEat."""
         results = []
         for partner_name in self.stores:
             print(f"[JustEat] Scraping {partner_name}...")
@@ -221,8 +253,7 @@ class JustEatScraper:
                 results.append(result)
             else:
                 results.append({
-                    "partner": partner_name,
-                    "platform": "JustEat",
+                    "partner": partner_name, "platform": "JustEat",
                     "df": None, "sf": None, "mbs": None,
                     "df_promo": None, "promo_menu": None,
                     "promocode": None, "web_promo": None,
@@ -230,6 +261,5 @@ class JustEatScraper:
                     "scraped_at": datetime.utcnow().isoformat(),
                     "source": "justeat",
                 })
-
         print(f"[JustEat] Done. {len(results)} results.")
         return results
