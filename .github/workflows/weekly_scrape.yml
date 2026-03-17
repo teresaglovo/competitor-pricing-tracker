@@ -3,16 +3,14 @@ name: Weekly Competitor Pricing Scraper
 on:
   schedule:
     # Every Monday at 07:00 UTC = 08:00 Madrid (CET) / 09:00 Madrid (CEST summer)
-    # Runs early enough to be ready in your inbox by 9am
     - cron: '0 7 * * 1'
 
-  # Allow manual trigger from GitHub UI (useful for testing)
   workflow_dispatch:
 
 jobs:
   scrape:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout code
@@ -23,31 +21,21 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Cache pip dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-
       - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Install Playwright browsers
-        run: playwright install chromium --with-deps
+        run: pip install httpx beautifulsoup4 lxml gspread google-auth
 
       - name: Run scraper
         env:
-          JUSTEAT_EMAIL:    ${{ secrets.JUSTEAT_EMAIL }}
-          JUSTEAT_PASSWORD: ${{ secrets.JUSTEAT_PASSWORD }}
-          UBEREATS_EMAIL:   ${{ secrets.UBEREATS_EMAIL }}
-          UBEREATS_PASSWORD: ${{ secrets.UBEREATS_PASSWORD }}
-          GLOVO_EMAIL:      ${{ secrets.GLOVO_EMAIL }}
-          GLOVO_PASSWORD:   ${{ secrets.GLOVO_PASSWORD }}
-          RECIPIENT_EMAIL:  ${{ secrets.RECIPIENT_EMAIL }}
-          GOOGLE_SHEET_ID:  ${{ secrets.GOOGLE_SHEET_ID }}
+          JUSTEAT_EMAIL:               ${{ secrets.JUSTEAT_EMAIL }}
+          UBEREATS_EMAIL:              ${{ secrets.UBEREATS_EMAIL }}
+          UBEREATS_PASSWORD:           ${{ secrets.UBEREATS_PASSWORD }}
+          GLOVO_EMAIL:                 ${{ secrets.GLOVO_EMAIL }}
+          GLOVO_PASSWORD:              ${{ secrets.GLOVO_PASSWORD }}
+          RECIPIENT_EMAIL:             ${{ secrets.RECIPIENT_EMAIL }}
+          GOOGLE_SHEET_ID:             ${{ secrets.GOOGLE_SHEET_ID }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          GMAIL_ADDRESS:    ${{ secrets.GMAIL_ADDRESS }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GMAIL_ADDRESS:               ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD:          ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python main.py
 
       - name: Notify on failure
