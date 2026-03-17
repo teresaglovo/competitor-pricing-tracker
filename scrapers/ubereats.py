@@ -54,7 +54,7 @@ class UberEatsScraper:
 
         # 2. Fallback: scrape the store HTML page
         if slug:
-            result = self._fetch_from_html(partner_name, slug, debug=not _debug_done)
+            result = self._fetch_from_html(partner_name, slug, store_id, debug=not _debug_done)
             if not _debug_done:
                 _debug_done = True
             if result:
@@ -89,6 +89,11 @@ class UberEatsScraper:
             print(f"[UberEats]   API POST → HTTP {resp.status_code}")
             if resp.status_code == 200:
                 data = resp.json()
+                # Debug: show response structure for first store
+                if not hasattr(self, '_api_debug_done'):
+                    self._api_debug_done = True
+                    import json as _json
+                    print(f"[UberEats DEBUG] POST response (first 500 chars):\n{_json.dumps(data)[:500]}")
                 result = self._parse_api(partner_name, data)
                 if result:
                     return result
@@ -99,9 +104,14 @@ class UberEatsScraper:
 
     def _parse_api(self, partner_name: str, data: dict) -> Optional[dict]:
         """Parse UberEats API response."""
-        if data.get("status") == "failure":
+        status = data.get("status", "")
+        if status == "failure":
+            print(f"[UberEats]   API status=failure (auth required?)")
             return None
         store = data.get("data") or data
+        # If we only got app config / empty data, skip
+        if not isinstance(store, dict) or not store:
+            return None
 
         df = None
         sf = None
@@ -172,9 +182,10 @@ class UberEatsScraper:
 
     # ── HTML fallback ─────────────────────────────────────────────────
 
-    def _fetch_from_html(self, partner_name: str, slug: str, debug=False) -> Optional[dict]:
+    def _fetch_from_html(self, partner_name: str, slug: str, store_id: str = "", debug=False) -> Optional[dict]:
         """Scrape the UberEats store page and search for fee data in embedded JSON."""
-        url = f"https://www.ubereats.com/es/store/{slug}/"
+        # UberEats Spain URLs: /es/store/{slug}/{store_id}
+        url = f"https://www.ubereats.com/es/store/{slug}/{store_id}" if store_id else f"https://www.ubereats.com/es/store/{slug}"
         try:
             resp = self.session.get(url, headers=HTML_HEADERS)
             print(f"[UberEats]   HTML → HTTP {resp.status_code}")
