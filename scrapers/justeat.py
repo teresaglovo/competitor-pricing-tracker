@@ -60,19 +60,60 @@ class JustEatScraper:
     # ── API approach ────────────────────────────────────────────────
 
     def _fetch_from_api(self, partner_name: str, slug: str) -> Optional[dict]:
-        """Try the i18n.api.just-eat.io endpoint used by the web app."""
+        """
+        Try JustEat's BFF (cw-api.takeaway.com) which is the confirmed API
+        used by the web app (seen in __NEXT_DATA__ clientConfig).
+        Also try the Next.js API routes on just-eat.es itself.
+        """
+        # Sanitise name for search queries
+        query = partner_name.lower().replace("'", "").replace("'", "")
+
         endpoints = [
-            f"https://i18n.api.just-eat.io/restaurants/byslug/{slug}?country=es",
-            f"https://es.fd-api.com/restaurants/byslug/{slug}",
+            # BFF discovery by seoSlug (most direct)
+            (
+                f"https://cw-api.takeaway.com/discovery/v2/restaurants/enriched/byseoSlug/{slug}?country=es&language=es-ES",
+                {**API_HEADERS, "X-Country-Id": "es"},
+            ),
+            # BFF discovery by postcode + name search
+            (
+                f"https://cw-api.takeaway.com/discovery/v2/restaurants/enriched/bypostcode/28020?q={query}&country=es&language=es-ES&limit=10",
+                {**API_HEADERS, "X-Country-Id": "es"},
+            ),
+            # Next.js API route on the same domain (bypasses external IP blocks)
+            (
+                f"https://www.just-eat.es/api/restaurants?seoSlug={slug}&country=es",
+                {**API_HEADERS},
+            ),
+            (
+                f"https://www.just-eat.es/api/v2/restaurants/byseoSlug/{slug}",
+                {**API_HEADERS},
+            ),
         ]
-        for url in endpoints:
+        for url, headers in endpoints:
             try:
-                resp = self.session.get(url, headers=API_HEADERS)
-                print(f"[JustEat]   API {url[:60]}... → HTTP {resp.status_code}")
+                resp = self.session.get(url, headers=headers)
+                print(f"[JustEat]   API {url[:70]}... → HTTP {resp.status_code}")
                 if resp.status_code == 200:
                     data = resp.json()
+                    # Handle list response (search results)
+                    if isinstance(data, list):
+                        for item in data:
+                            if item.get("seoSlug") == slug or slug in str(item.get("seoSlug", "")):
+                                return self._parse_api(partner_name, item)
+                        if data:
+                            return self._parse_api(partner_name, data[0])
+                    # Handle dict with restaurants array
+                    restaurants = data.get("restaurants") or data.get("data", {}).get("restaurants")
+                    if restaurants:
+                        for r in restaurants:
+                            if r.get("seoSlug") == slug or slug in str(r.get("seoSlug", "")):
+                                return self._parse_api(partner_name, r)
+                        return self._parse_api(partner_name, restaurants[0])
+                    # Handle single restaurant object
                     restaurant = data.get("restaurant") or data
-                    if isinstance(restaurant, dict) and restaurant.get("name"):
+                    if isinstance(restaurant, dict) and (
+                        restaurant.get("name") or restaurant.get("seoSlug")
+                    ):
                         return self._parse_api(partner_name, restaurant)
             except Exception as e:
                 print(f"[JustEat]   API error: {e}")

@@ -171,15 +171,26 @@ class GlovoScraper:
         if m:
             mbs = f"If < €{float(m.group(2)):.2f}, surcharge €{float(m.group(1)):.2f}"
 
-        # Promotions — look in the unescaped HTML
-        promo_matches = re.findall(r'"(?:description|label|title)"\s*:\s*"([^"]{5,100})"', h)
+        # Promotions — only look at "label" fields (not "description" which has menu items)
+        # A genuine promo has: discount %, free delivery, voucher, or explicit promo keywords
+        label_matches = re.findall(r'"label"\s*:\s*"([^"]{3,80})"', h)
         seen = set()
-        for desc in promo_matches:
+        for desc in label_matches:
             low = desc.lower()
-            if any(w in low for w in ["gratis", "envío", "envio", "promo", "descuento", "oferta", "free", "% "]):
-                if desc not in seen:
-                    seen.add(desc)
-                    promos.append(desc)
+            # Must be a real promo indicator, not a product description
+            is_promo = any([
+                re.search(r'\d+\s*%', desc),           # "20% OFF", "HASTA 60%"
+                "gratis" in low,
+                "envío gratis" in low,
+                "free delivery" in low,
+                "descuento" in low,
+                "código" in low,
+                re.search(r'[-–]\s*\d+\s*€', desc),    # "- 2€ off"
+                desc.strip().upper() in ("PROMOCIONES", "OFERTA", "OFERTAS", "PROMO"),
+            ])
+            if is_promo and desc not in seen:
+                seen.add(desc)
+                promos.append(desc)
             if len(promos) >= 5:
                 break
 
