@@ -4,11 +4,26 @@ Uses UberEats' internal store API with the store UUIDs already in competitors.js
 No login required — the getStoreV1 endpoint is public for store browsing.
 """
 
+import base64
 import httpx
 import re
 import time
+import uuid as _uuid_mod
 from datetime import datetime
 from typing import Optional
+
+
+def b64_to_uuid(b64_str: str) -> str:
+    """
+    UberEats store IDs are base64url-encoded UUIDs.
+    sSnQZHiSQHKtKDW4tznf5Q  →  b129d064-7892-4072-ad28-35b8b739dfe5
+    """
+    try:
+        padded = b64_str + "=" * ((4 - len(b64_str) % 4) % 4)
+        raw = base64.urlsafe_b64decode(padded)
+        return str(_uuid_mod.UUID(bytes=raw))
+    except Exception:
+        return b64_str
 
 
 HEADERS = {
@@ -65,40 +80,30 @@ class UberEatsScraper:
     # ── API approach ─────────────────────────────────────────────────
 
     def _fetch_by_uuid(self, partner_name: str, store_uuid: str) -> Optional[dict]:
-        """Call UberEats getStoreV1 API with the store UUID."""
-        # GET variant
-        url = f"https://www.ubereats.com/api/getStoreV1?localeCode=es&storeUuid={store_uuid}"
-        try:
-            resp = self.session.get(url, headers=HEADERS)
-            print(f"[UberEats]   API GET → HTTP {resp.status_code}")
-            if resp.status_code == 200:
-                data = resp.json()
-                result = self._parse_api(partner_name, data)
-                if result:
-                    return result
-        except Exception as e:
-            print(f"[UberEats]   GET error: {e}")
+        """
+        Call UberEats getStoreV1 API.
+        The config stores base64url-encoded UUIDs; the API needs the standard hex format.
+        """
+        # Convert base64url → standard UUID hex (e.g. sSnQZH... → b129d064-7892-...)
+        hex_uuid = b64_to_uuid(store_uuid)
+        print(f"[UberEats]   UUID: {store_uuid} → {hex_uuid}")
 
-        # POST variant
-        try:
-            resp = self.session.post(
-                "https://www.ubereats.com/api/getStoreV1?localeCode=es",
-                json={"storeUuid": store_uuid},
-                headers=HEADERS,
-            )
-            print(f"[UberEats]   API POST → HTTP {resp.status_code}")
-            if resp.status_code == 200:
-                data = resp.json()
-                # Debug: show response structure for first store
-                if not hasattr(self, '_api_debug_done'):
-                    self._api_debug_done = True
-                    import json as _json
-                    print(f"[UberEats DEBUG] POST response (first 500 chars):\n{_json.dumps(data)[:500]}")
-                result = self._parse_api(partner_name, data)
-                if result:
-                    return result
-        except Exception as e:
-            print(f"[UberEats]   POST error: {e}")
+        for uuid_str in [hex_uuid, store_uuid]:
+            url = f"https://www.ubereats.com/api/getStoreV1?localeCode=es&storeUuid={uuid_str}"
+            try:
+                resp = self.session.get(url, headers=HEADERS)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if not hasattr(self, '_api_debug_done'):
+                        self._api_debug_done = True
+                        import json as _json
+                        print(f"[UberEats DEBUG] API response: {_json.dumps(data)[:400]}")
+                    result = self._parse_api(partner_name, data)
+                    if result:
+                        return result
+
+            except Exception as e:
+                print(f"[UberEats]   API error: {e}")
 
         return None
 
@@ -201,6 +206,15 @@ class UberEatsScraper:
 
         # Unescape Unicode-escaped quotes (\u0022 → ") common in UberEats HTML
         h = h.replace("\\u0022", '"').replace("\\u003e", ">").replace("\\u003c", "<")
+
+        # Try to extract real UUID from HTML and call API (if not already tried)
+        real_uuid_match = re.search(r'"storeUuid"\s*:\s*"([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})"', h)
+        if real_uuid_match:
+            real_uuid = real_uuid_match.group(1)
+            print(f"[UberEats]   Found real UUID in HTML: {real_uuid}")
+            api_result = self._fetch_by_uuid(partner_name, real_uuid)
+            if api_result:
+                return api_result
 
         if debug:
             print(f"[UberEats DEBUG] HTML size: {len(html)} chars")
