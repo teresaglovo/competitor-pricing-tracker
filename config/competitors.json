@@ -1,0 +1,112 @@
+{
+  "competitors": [
+    { "name": "McD",                "owner": "Andrea",   "am": "Elena" },
+    { "name": "BK",                 "owner": "Lourenço", "am": "Borja" },
+    { "name": "KFC",                "owner": "Paula",    "am": "Claudia" },
+    { "name": "Telepizza",          "owner": "Celia",    "am": "Javier" },
+    { "name": "Five Guys",          "owner": "Rocío",    "am": "Monica" },
+    { "name": "La Tagliatella",     "owner": "Paula",    "am": "Claudia" },
+    { "name": "Goiko",              "owner": "Teresa",   "am": "Javier" },
+    { "name": "Domino's Pizza",     "owner": "Lourenço", "am": "Borja" },
+    { "name": "Papa John's",        "owner": "Celia",    "am": "Javier" },
+    { "name": "Pizza Hut",          "owner": "Celia",    "am": "Javier" },
+    { "name": "TGB",                "owner": "Teresa",   "am": "Javier" },
+    { "name": "100 Montaditos",     "owner": "Celia",    "am": "Javier" },
+    { "name": "Foster's Hollywood", "owner": "Andrea",   "am": "Borja" },
+    { "name": "VIPS",               "owner": "Teresa",   "am": "Borja" },
+    { "name": "Starbucks",          "owner": "Lourenço", "am": "Borja" },
+    { "name": "Carl's Jr",          "owner": "Rocío",    "am": "Monica" },
+    { "name": "Miss Sushi",         "owner": "Rocío",    "am": "Monica" },
+    { "name": "Taco Bell",          "owner": "Paula",    "am": "Claudia" },
+    { "name": "Pizzeria Carlos",    "owner": "Clau",     "am": "Igna" }
+  ],
+  "platforms": {
+    "justeat": {
+      "base_url": "https://www.just-eat.es",
+      "api_url": "https://es.fd-api.com/restaurants/v1",
+      "city": "madrid",
+      "stores": {
+        "McD":                { "slug": "TODO", "id": "TODO" },
+        "BK":                 { "slug": "TODO", "id": "TODO" },
+        "KFC":                { "slug": "TODO", "id": "TODO" },
+        "Telepizza":          { "slug": "TODO", "id": "TODO" },
+        "Five Guys":          { "slug": "TODO", "id": "TODO" },
+        "La Tagliatella":     { "slug": "TODO", "id": "TODO" },
+        "Goiko":              { "slug": "TODO", "id": "TODO" },
+        "Domino's Pizza":     { "slug": "TODO", "id": "TODO" },
+        "Papa John's":        { "slug": "TODO", "id": "TODO" },
+        "Pizza Hut":          { "slug": "TODO", "id": "TODO" },
+        "TGB":                { "slug": "TODO", "id": "TODO" },
+        "100 Montaditos":     { "slug": "TODO", "id": "TODO" },
+        "Foster's Hollywood": { "slug": "TODO", "id": "TODO" },
+        "VIPS":               { "slug": "TODO", "id": "TODO" },
+        "Starbucks":          { "slug": "TODO", "id": "TODO" },
+        "Carl's Jr":          { "slug": "TODO", "id": "TODO" },
+        "Miss Sushi":         { "slug": "TODO", "id": "TODO" },
+        "Taco Bell":          { "slug": "TODO", "id": "TODO" },
+        "Pizzeria Carlos":    { "slug": "TODO", "id": "TODO" }
+      }
+    },
+    "ubereats": {
+      "base_url": "https://www.ubereats.com/es",
+      "address": "Puerta del Sol, Madrid",
+      "latitude": "40.4168",
+      "longitude": "-3.7038",
+      "stores": {
+        "McD":                { "store_id": "TODO", "slug": "TODO" },
+        "BK":                 { "store_id": "TODO", "slug": "TODO" },
+        "KFC":                { "store_id": "TODO", "slug": "TODO" },
+        "Telepizza":          { "store_id": "TODO", "slug": "TODO" },
+        "Five Guys":          { "store_id": "TODO", "slug": "TODO" },
+        "La Tagliatella":     { "store_id": "TODO", "slug": "TODO" },
+        "Goiko":              { "store_id": "TODO", "slug": "TODO" },
+        "Domino's Pizza":     { "store_id": "TODO", "slug": "TODO" },
+        "Papa John's":        { "store_id": "TODO", "slug": "TODO" },
+        "Pizza Hut":          { "store_id": "TODO", "slug": "TODO" },
+        "TGB":                { "store_id": "TODO", "slug": "TODO" },
+        "100 Montaditos":     { "store_id": "TODO", "slug": "TODO" },
+        "Foster's Hollywood": { "store_id": "TODO", "slug": "TODO" },
+        "VIPS":               { "store_id": "TODO", "slug": "TODO" },
+        "Starbucks":          { "store_id": "TODO", "slug": "TODO" },
+        "Carl's Jr":          { "store_id": "TODO", "slug": "TODO" },
+        "Miss Sushi":         { "store_id": "TODO", "slug": "TODO" },
+        "Taco Bell":          { "store_id": "TODO", "slug": "TODO" },
+        "Pizzeria Carlos":    { "store_id": "TODO", "slug": "TODO" }
+      }
+    },
+    "glovo": {
+      "base_url": "https://glovoapp.com",
+      "api_url": "https://api.glovoapp.com/v3",
+      "city_code": "MAD",
+      "address": "Puerta del Sol, Madrid",
+      "stores": {
+        "McD":                { "store_id": "TODO", "slug": "TODO" },
+        "BK":                 { "store_id": "TODO", "slug": "TODO" },
+        "KFC":                { "store_id": "TODO", "slug": "TODO" },
+        "Telepizza":          { "store_id": "TODO", "slug": "TODO" },
+        "Five Guys":          { "store_id": "TODO", "slug": "TODO" },
+        "La Tagliatella":     { "store_id": "TODO", "slug": "TODO" },
+        "Goiko":              { "store_id": "TODO", "slug": "TODO" },
+        "Domino's Pizza":     { "store_id": "TODO", "slug": "TODO" },
+        "Papa John's":        { "store_id": "TODO", "slug": "TODO" },
+        "Pizza Hut":          { "store_id": "TODO", "slug": "TODO" },
+        "TGB":                { "store_id": "TODO", "slug": "TODO" },
+        "100 Montaditos":     { "store_id": "TODO", "slug": "TODO" },
+        "Foster's Hollywood": { "store_id": "TODO", "slug": "TODO" },
+        "VIPS":               { "store_id": "TODO", "slug": "TODO" },
+        "Starbucks":          { "store_id": "TODO", "slug": "TODO" },
+        "Carl's Jr":          { "store_id": "TODO", "slug": "TODO" },
+        "Miss Sushi":         { "store_id": "TODO", "slug": "TODO" },
+        "Taco Bell":          { "store_id": "TODO", "slug": "TODO" },
+        "Pizzeria Carlos":    { "store_id": "TODO", "slug": "TODO" }
+      }
+    }
+  },
+  "reference_address": {
+    "city": "Madrid",
+    "district": "Centro",
+    "street": "Puerta del Sol",
+    "latitude": 40.4168,
+    "longitude": -3.7038
+  }
+}
