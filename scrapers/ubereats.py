@@ -1,226 +1,267 @@
 """
 UberEats Spain scraper.
-Uses Playwright with stealth to intercept internal API calls.
-Logs in with a dedicated account to bypass Akamai bot detection.
+Uses UberEats' internal store API with the store UUIDs already in competitors.json.
+No login required — the getStoreV1 endpoint is public for store browsing.
 """
 
-import asyncio
-import json
+import httpx
 import re
+import time
 from datetime import datetime
 from typing import Optional
-from playwright.async_api import async_playwright, Page
+
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "es-ES,es;q=0.9",
+    "Content-Type": "application/json",
+    "x-csrf-token": "x",
+    "Referer": "https://www.ubereats.com/es/",
+    "Origin": "https://www.ubereats.com",
+}
+
+HTML_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+    "Accept-Language": "es-ES,es;q=0.9",
+    "Referer": "https://www.ubereats.com/es/",
+}
+
+_debug_done = False
 
 
 class UberEatsScraper:
     def __init__(self, email: str, password: str, competitors_config: dict):
-        self.email = email
-        self.password = password
         self.stores = competitors_config["platforms"]["ubereats"]["stores"]
-        self.address = competitors_config["platforms"]["ubereats"]["address"]
         self.lat = competitors_config["platforms"]["ubereats"]["latitude"]
         self.lon = competitors_config["platforms"]["ubereats"]["longitude"]
-        self._captured = {}
+        self.session = httpx.Client(follow_redirects=True, timeout=30)
 
-    async def scrape_all(self) -> list[dict]:
-        """Scrape all configured competitors on UberEats."""
-        results = []
+    def scrape_store(self, partner_name: str) -> Optional[dict]:
+        global _debug_done
+        store_config = self.stores.get(partner_name, {})
+        store_id = store_config.get("store_id", "")
+        slug = store_config.get("slug", "")
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-dev-shm-usage",
-                ]
-            )
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                           "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                viewport={"width": 1920, "height": 1080},
-                locale="es-ES",
-                timezone_id="Europe/Madrid",
-                geolocation={"latitude": float(self.lat), "longitude": float(self.lon)},
-                permissions=["geolocation"],
-            )
+        # 1. Try the internal API with store UUID
+        if store_id:
+            result = self._fetch_by_uuid(partner_name, store_id)
+            if result:
+                return result
 
-            # Patch navigator.webdriver to avoid detection
-            await context.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
-                window.chrome = { runtime: {} };
-            """)
+        # 2. Fallback: scrape the store HTML page
+        if slug:
+            result = self._fetch_from_html(partner_name, slug, debug=not _debug_done)
+            if not _debug_done:
+                _debug_done = True
+            if result:
+                return result
 
-            page = await context.new_page()
+        return None
 
-            # Login
-            logged_in = await self._login(page)
-            if not logged_in:
-                print("[UberEats] Login failed, proceeding as guest (limited data)")
+    # ── API approach ─────────────────────────────────────────────────
 
-            # Scrape each store
-            for partner_name, store_config in self.stores.items():
-                if store_config.get("store_id") == "TODO":
-                    print(f"[UberEats] No store ID for {partner_name}, skipping.")
-                    results.append(self._empty_result(partner_name))
-                    continue
-
-                print(f"[UberEats] Scraping {partner_name}...")
-                result = await self._scrape_store(page, partner_name, store_config)
-                results.append(result)
-                await asyncio.sleep(3)  # Be polite, avoid rate limiting
-
-            await browser.close()
-
-        print(f"[UberEats] Done. {len(results)} results.")
-        return results
-
-    async def _login(self, page: Page) -> bool:
-        """Log in to UberEats."""
+    def _fetch_by_uuid(self, partner_name: str, store_uuid: str) -> Optional[dict]:
+        """Call UberEats getStoreV1 API with the store UUID."""
+        # GET variant
+        url = f"https://www.ubereats.com/api/getStoreV1?localeCode=es&storeUuid={store_uuid}"
         try:
-            await page.goto("https://www.ubereats.com/es", wait_until="networkidle", timeout=30000)
-            await asyncio.sleep(2)
-
-            # Click login
-            login_btn = page.locator("a[href*='login'], button:has-text('Inicia sesión'), button:has-text('Sign in')")
-            if await login_btn.count() > 0:
-                await login_btn.first.click()
-                await asyncio.sleep(2)
-
-            # Enter email
-            email_input = page.locator("input[type='email'], input[name='email']")
-            if await email_input.count() > 0:
-                await email_input.fill(self.email)
-                await page.keyboard.press("Enter")
-                await asyncio.sleep(2)
-
-            # Enter password
-            pwd_input = page.locator("input[type='password']")
-            if await pwd_input.count() > 0:
-                await pwd_input.fill(self.password)
-                await page.keyboard.press("Enter")
-                await asyncio.sleep(3)
-
-            # Check if logged in
-            is_logged = await page.locator("a[href*='account'], button[aria-label*='account']").count() > 0
-            print(f"[UberEats] Login {'OK' if is_logged else 'uncertain (continuing anyway)'}")
-            return True
-
+            resp = self.session.get(url, headers=HEADERS)
+            print(f"[UberEats]   API GET → HTTP {resp.status_code}")
+            if resp.status_code == 200:
+                data = resp.json()
+                result = self._parse_api(partner_name, data)
+                if result:
+                    return result
         except Exception as e:
-            print(f"[UberEats] Login error: {e}")
-            return False
+            print(f"[UberEats]   GET error: {e}")
 
-    async def _scrape_store(self, page: Page, partner_name: str, store_config: dict) -> dict:
-        """Scrape a single UberEats store page and intercept API responses."""
-        captured_data = {}
-
-        async def handle_response(response):
-            url = response.url
-            # Intercept store detail API calls
-            if any(pattern in url for pattern in [
-                "/v1/eats/store/",
-                "/v2/eats/store/",
-                "storeInfo",
-                "getFeedV1",
-            ]):
-                try:
-                    data = await response.json()
-                    captured_data.update(self._extract_pricing(data))
-                except Exception:
-                    pass
-
-        page.on("response", handle_response)
-
+        # POST variant
         try:
-            slug = store_config.get("slug", "")
-            store_id = store_config.get("store_id", "")
-            url = f"https://www.ubereats.com/es/store/{slug}/{store_id}"
-
-            await page.goto(url, wait_until="networkidle", timeout=30000)
-            await asyncio.sleep(3)
-
-            # Also try to read from page content if API intercept didn't work
-            if not captured_data:
-                captured_data = await self._extract_from_page(page)
-
+            resp = self.session.post(
+                "https://www.ubereats.com/api/getStoreV1?localeCode=es",
+                json={"storeUuid": store_uuid},
+                headers=HEADERS,
+            )
+            print(f"[UberEats]   API POST → HTTP {resp.status_code}")
+            if resp.status_code == 200:
+                data = resp.json()
+                result = self._parse_api(partner_name, data)
+                if result:
+                    return result
         except Exception as e:
-            print(f"[UberEats] Error loading {partner_name}: {e}")
-            return self._empty_result(partner_name)
-        finally:
-            page.remove_listener("response", handle_response)
+            print(f"[UberEats]   POST error: {e}")
 
-        if captured_data:
-            return {
-                "partner": partner_name,
-                "platform": "UberEats",
-                **captured_data,
-                "scraped_at": datetime.utcnow().isoformat(),
-                "source": "ubereats",
-            }
+        return None
 
-        return self._empty_result(partner_name)
+    def _parse_api(self, partner_name: str, data: dict) -> Optional[dict]:
+        """Parse UberEats API response."""
+        if data.get("status") == "failure":
+            return None
+        store = data.get("data") or data
 
-    def _extract_pricing(self, data: dict) -> dict:
-        """Parse pricing fields from UberEats API response JSON."""
-        result = {
-            "df": None, "sf": None, "mbs": None,
-            "df_promo": "NO", "promo_menu": "NO",
-            "promocode": "NO", "web_promo": None, "comments": None,
-        }
+        df = None
+        sf = None
+        mbs = None
+        promos = []
 
-        # Navigate common UberEats response structures
-        store = (
-            data.get("data", {}).get("storeInfo") or
-            data.get("storeInfo") or
-            data.get("store") or
-            data
-        )
+        # Delivery fee (UberEats uses cents)
+        fare = store.get("fareInfo") or store.get("deliveryFee") or {}
+        if isinstance(fare, dict):
+            for key in ("deliveryFee", "total", "price"):
+                val = fare.get(key)
+                if val is not None:
+                    try:
+                        v = float(val) / 100
+                        df = f"€{v:.2f}"
+                        break
+                    except Exception:
+                        pass
 
-        # Delivery fee
-        fee_info = store.get("fareInfo") or store.get("deliveryFee") or {}
-        if isinstance(fee_info, dict):
-            amount = fee_info.get("deliveryFee") or fee_info.get("price")
-            if amount is not None:
-                result["df"] = f"€{float(amount)/100:.2f}" if amount > 10 else f"€{float(amount):.2f}"
+        # Service fee
+        service = store.get("serviceFee") or {}
+        if isinstance(service, dict):
+            for key in ("fee", "total", "price", "amount"):
+                val = service.get(key)
+                if val is not None:
+                    try:
+                        v = float(val) / 100
+                        if v > 0:
+                            sf = f"€{v:.2f}"
+                        break
+                    except Exception:
+                        pass
 
-        # Minimum basket / small order surcharge
-        min_order = store.get("minimumOrderPrice") or store.get("minimumBasket")
+        # Minimum order
+        min_order = store.get("minOrderSize") or store.get("minimumOrderAmount")
         if min_order is not None:
-            val = float(min_order) / 100 if min_order > 100 else float(min_order)
-            result["mbs"] = f"Pedido mínimo €{val:.2f}"
+            try:
+                v = float(min_order) / 100
+                mbs = f"Pedido mínimo €{v:.2f}"
+            except Exception:
+                pass
 
         # Promotions
-        promos = store.get("promotions") or store.get("etaRangeByFreshness") or []
-        if isinstance(promos, list) and promos:
-            promo_texts = [p.get("title") or p.get("description") or "" for p in promos if isinstance(p, dict)]
-            promo_texts = [t for t in promo_texts if t]
-            if promo_texts:
-                result["promo_menu"] = "YES"
-                result["comments"] = " | ".join(promo_texts)
+        for promo in (store.get("catalogSections") or store.get("promotions") or []):
+            if isinstance(promo, dict):
+                title = promo.get("title") or promo.get("name") or ""
+                if title and any(
+                    w in title.lower()
+                    for w in ["promo", "oferta", "gratis", "descuento", "free", "%"]
+                ):
+                    promos.append(str(title))
 
-        return result
+        has_promo = "YES" if promos else "NO"
+        df_promo = "YES" if any(
+            w in " ".join(promos).lower()
+            for w in ["delivery", "envío", "envio", "gratis", "free", "0€"]
+        ) else "NO"
 
-    async def _extract_from_page(self, page: Page) -> dict:
-        """Fallback: extract pricing data visible on the page DOM."""
-        result = {}
-        try:
-            # Look for delivery fee text on page
-            fee_el = page.locator("[data-testid*='delivery-fee'], [class*='deliveryFee']").first
-            if await fee_el.count() > 0:
-                result["df"] = await fee_el.text_content()
-        except Exception:
-            pass
-        return result
-
-    def _empty_result(self, partner_name: str) -> dict:
         return {
-            "partner": partner_name,
-            "platform": "UberEats",
-            "df": None, "sf": None, "mbs": None,
-            "df_promo": None, "promo_menu": None,
-            "promocode": None, "web_promo": None,
-            "comments": "SCRAPE_FAILED",
+            "partner": partner_name, "platform": "UberEats",
+            "df": df, "sf": sf, "mbs": mbs,
+            "df_promo": df_promo, "promo_menu": has_promo,
+            "promocode": "NO", "web_promo": None,
+            "comments": " | ".join(promos) if promos else None,
             "scraped_at": datetime.utcnow().isoformat(),
-            "source": "ubereats",
+            "source": "ubereats_api",
         }
+
+    # ── HTML fallback ─────────────────────────────────────────────────
+
+    def _fetch_from_html(self, partner_name: str, slug: str, debug=False) -> Optional[dict]:
+        """Scrape the UberEats store page and search for fee data in embedded JSON."""
+        url = f"https://www.ubereats.com/es/store/{slug}/"
+        try:
+            resp = self.session.get(url, headers=HTML_HEADERS)
+            print(f"[UberEats]   HTML → HTTP {resp.status_code}")
+            if resp.status_code != 200:
+                return None
+            html = resp.text
+        except Exception as e:
+            print(f"[UberEats]   HTML error: {e}")
+            return None
+
+        # Unescape escaped JSON
+        h = html.replace('\\"', '"').replace("\\'", "'")
+
+        if debug:
+            print(f"[UberEats DEBUG] HTML size: {len(html)} chars")
+            keywords = ["deliveryFee", "serviceFee", "minOrderSize", "fareInfo", "deliveryCost"]
+            found = set()
+            for kw in keywords:
+                for m in re.finditer(re.escape(kw), h, re.IGNORECASE):
+                    start = max(0, m.start() - 20)
+                    end = min(len(h), m.end() + 120)
+                    snippet = h[start:end].replace("\n", " ")
+                    if snippet not in found:
+                        found.add(snippet)
+                        print(f"[UberEats DEBUG] ...{snippet}...")
+                        if len(found) >= 10:
+                            break
+
+        # Search for delivery fee
+        df = None
+        for pat in [
+            r'"deliveryFee"\s*:\s*\{\s*"value"\s*:\s*([\d.]+)',
+            r'"deliveryFee"\s*:\s*([\d.]+)',
+            r'"fareInfo"[^}]{0,50}"deliveryFee"\s*:\s*([\d.]+)',
+        ]:
+            m = re.search(pat, h)
+            if m:
+                try:
+                    v = float(m.group(1))
+                    if v >= 100:
+                        v = v / 100
+                    if 0 <= v <= 15:
+                        df = f"€{v:.2f}"
+                        break
+                except Exception:
+                    continue
+
+        mbs = None
+        m = re.search(r'"minOrderSize"\s*:\s*([\d.]+)', h)
+        if m:
+            try:
+                v = float(m.group(1))
+                if v >= 100:
+                    v = v / 100
+                mbs = f"Pedido mínimo €{v:.2f}"
+            except Exception:
+                pass
+
+        if df is None and mbs is None:
+            return None
+
+        return {
+            "partner": partner_name, "platform": "UberEats",
+            "df": df, "sf": None, "mbs": mbs,
+            "df_promo": "NO", "promo_menu": "NO",
+            "promocode": "NO", "web_promo": None, "comments": None,
+            "scraped_at": datetime.utcnow().isoformat(),
+            "source": "ubereats_html",
+        }
+
+    def scrape_all(self) -> list[dict]:
+        results = []
+        for partner_name in self.stores:
+            print(f"[UberEats] Scraping {partner_name}...")
+            result = self.scrape_store(partner_name)
+            if result:
+                results.append(result)
+            else:
+                results.append({
+                    "partner": partner_name, "platform": "UberEats",
+                    "df": None, "sf": None, "mbs": None,
+                    "df_promo": None, "promo_menu": None,
+                    "promocode": None, "web_promo": None,
+                    "comments": "SCRAPE_FAILED",
+                    "scraped_at": datetime.utcnow().isoformat(),
+                    "source": "ubereats",
+                })
+            time.sleep(1)
+        print(f"[UberEats] Done. {len(results)} results.")
+        return results

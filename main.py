@@ -11,6 +11,7 @@ from pathlib import Path
 
 from scrapers.justeat import JustEatScraper
 from scrapers.glovo import GlovoScraper
+from scrapers.ubereats import UberEatsScraper
 from utils.sheets import SheetsWriter
 from utils.email_sender import send_weekly_email
 
@@ -28,16 +29,18 @@ def run():
 
     config = load_config()
 
-    justeat_email  = os.environ.get("JUSTEAT_EMAIL", "")
-    glovo_email    = os.environ["GLOVO_EMAIL"]
-    glovo_password = os.environ["GLOVO_PASSWORD"]
+    justeat_email   = os.environ.get("JUSTEAT_EMAIL", "")
+    glovo_email     = os.environ["GLOVO_EMAIL"]
+    glovo_password  = os.environ["GLOVO_PASSWORD"]
+    ubereats_email  = os.environ.get("UBEREATS_EMAIL", "")
+    ubereats_pass   = os.environ.get("UBEREATS_PASSWORD", "")
     recipient_email = os.environ["RECIPIENT_EMAIL"]
 
     all_results = []
     errors = []
 
     # --- JustEat ---
-    print("\n[1/2] JustEat...")
+    print("\n[1/3] JustEat...")
     try:
         je_scraper = JustEatScraper(justeat_email, "", config)
         je_results = je_scraper.scrape_all()
@@ -48,7 +51,7 @@ def run():
         errors.append(f"JustEat: {e}")
 
     # --- Glovo ---
-    print("\n[2/2] Glovo...")
+    print("\n[2/3] Glovo...")
     try:
         gl_scraper = GlovoScraper(glovo_email, glovo_password, config)
         gl_results = gl_scraper.scrape_all()
@@ -57,6 +60,17 @@ def run():
     except Exception as e:
         print(f"      FAILED: {e}")
         errors.append(f"Glovo: {e}")
+
+    # --- UberEats ---
+    print("\n[3/3] UberEats...")
+    try:
+        ue_scraper = UberEatsScraper(ubereats_email, ubereats_pass, config)
+        ue_results = ue_scraper.scrape_all()
+        all_results.extend(ue_results)
+        print(f"      OK: {len(ue_results)} results")
+    except Exception as e:
+        print(f"      FAILED: {e}")
+        errors.append(f"UberEats: {e}")
 
     print(f"\nTotal scraped: {len(all_results)} rows")
 
