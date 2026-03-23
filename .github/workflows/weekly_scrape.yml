@@ -2,7 +2,7 @@ name: Weekly Competitor Pricing Scraper
 
 on:
   schedule:
-    - cron: '0 7 * * 1'
+    - cron: '0 21 * * 0'
   workflow_dispatch:
 
 jobs:

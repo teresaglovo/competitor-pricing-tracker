@@ -1,7 +1,6 @@
 """
-Main entry point for the weekly competitor pricing scraper.
-Phase 1: JustEat + Glovo (httpx only, no browser needed)
-Phase 2: UberEats (Playwright, coming soon)
+Main entry point for the weekly competitor promo scraper.
+Runs every Sunday night and checks promotions on Glovo, UberEats and JustEat.
 """
 
 import json
